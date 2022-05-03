@@ -51,9 +51,9 @@ main(void)
 }
 
 /**
+ * https://edstem.org/us/courses/21025/discussion/1437434?answer=3250618
  * Converts the current process ID into a string and returns the pointer
  * to it.
- * https://edstem.org/us/courses/21025/discussion/1437434?answer=3250618
  *
  * @return The pointer to the PID string
  */
@@ -92,7 +92,6 @@ get_userinput(char *pidstr)
       {
         buf_size *= 2;
         buf = realloc(buf, buf_size);
-        printf("Buffer is now %zu!\n", buf_size);
       }
       if (c == '$')
       {
@@ -114,25 +113,9 @@ get_userinput(char *pidstr)
       }
     }
     buf[count] = '\0';
-    printf("Your input was: '%s'\n", buf);
     char **tokens = tokenize_input(buf);
     /* sort input into a struct of arguments */
     struct Arguments *args = get_args(tokens);
-    printf("Here are your arguments:\n");
-    printf("command: '%s'\n", args->command);
-    int i = 0;
-    while (args->options[i] != NULL) 
-    {    
-      printf("option: '%s'\n", args->options[i]);
-      ++i;
-    }
-    i = 0;
-    while (args->parameters[i] != NULL) 
-    {    
-      printf("parameter: '%s'\n", args->parameters[i]);
-      ++i;
-    }
-    printf("background: %d\n", args->background);
     free(buf);
     free(tokens);
     return args;
@@ -158,14 +141,8 @@ tokenize_input(char *buf)
     {
       array_size *= 2;
       tokens = realloc(tokens, array_size);
-      printf("array_size is now %zu!\n", array_size / sizeof(char*));
     }
     tokens[count++] = strtok(NULL, " ");
-  }
-  printf("Here are your tokens:\n");
-  for (int i = 0; i < count - 1; ++i)
-  {
-    printf("%d: '%s'\n", i, tokens[i]); 
   }
   return tokens;
 }
@@ -194,11 +171,10 @@ get_args(char **input)
   {
     if (input[i][0] == '-')
     { // add to options
-      if (j * sizeof(char*) == params_size - sizeof(char*))
+      if (j * sizeof(char*) == options_size - sizeof(char*))
       {
         options_size *= 2;
         args->options = realloc(args->options, options_size);
-        printf("options_size is now %zu!\n", options_size / sizeof(char*));
       }
       args->options[j++] = strdup(input[i]);
     }
@@ -208,7 +184,6 @@ get_args(char **input)
       {
         params_size *= 2;
         args->parameters = realloc(args->parameters, params_size);
-        printf("params_size is now %zu!\n", params_size / sizeof(char*));
       }
       args->parameters[k++] = strdup(input[i]);
     }
