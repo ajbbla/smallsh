@@ -15,6 +15,16 @@
  * AUTHOR: Allen Blanton (CS 344, Spring 2022)
  */
 
+/**
+ * TODO:
+ * - "cd" built-in
+ * - "exit" built-in
+ * - function to handle non-built-in commands (foregound)
+ * - background functionality
+ * - input/output redirection
+ * - signals
+ */
+
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -25,27 +35,52 @@ char *get_pidstr(void);
 struct Arguments *get_userinput(char *pidstr);
 char **tokenize_input(char *buf);
 struct Arguments *get_args(char **input);
+void cleanup_args(struct Arguments *args);
 char *strdup(const char *s);
+int builtin_exit(struct Arguments *args);
+void builtin_status(struct Arguments *args, int exit_status);
+void builtin_cd(struct Arguments *args);
+int exec_args(struct Arguments *args);
 
 struct Arguments
 {
   char *command;
   char **options;
   char **parameters;
+  int num_options;
+  int num_params;
   int background; // Boolean
 };
 
 int
 main(void)
 {
+  int exit_status = 0;
   char *pidstr = get_pidstr();
   printf("PID: %s\n", pidstr);
+  struct Arguments *args = get_userinput(pidstr);
   while (1)
   {
-    struct Arguments *args = get_userinput(pidstr);
-    // execute args
-    // clean up args
+    if (!strcmp(args->command, "exit") && !builtin_exit(args))
+    {
+      break;
+    }
+    else if (!strcmp(args->command, "status"))
+    {
+      builtin_status(args, exit_status);
+    }
+    else if (!strcmp(args->command, "cd"))
+    {
+      builtin_cd(args);
+    }
+    else
+    {
+      exit_status = exec_args(args);
+    }
+    cleanup_args(args);
+    args = get_userinput(pidstr);
   }
+  cleanup_args(args);
   free(pidstr);
   return EXIT_SUCCESS;
 }
@@ -164,9 +199,9 @@ get_args(char **input)
   size_t params_size = 4 * sizeof(char*);
   args->options = malloc(options_size);
   args->parameters = malloc(params_size);
-  int i = 1; // input pointer
-  int j = 0; // options pointer
-  int k = 0; // params pointer
+  int i = 1; // input index
+  int j = 0; // options index
+  int k = 0; // params index
   while (input[i] != NULL)
   {
     if (input[i][0] == '-')
@@ -189,14 +224,43 @@ get_args(char **input)
     }
     ++i;
   }
-  // terminate options and params
+  // NULL terminate options and params
   args->options[j] = NULL;
+  args->num_options = j;
   args->parameters[k] = NULL;
+  args->num_params = k;
   // background -> 1 if final element == '&', 0 otherwise
-  if (!strcmp(input[i - 1], "&")) args->background = 1;
-  else args->background = 0;
-
+  if (!strcmp(input[i - 1], "&")) 
+  {
+    args->background = 1;
+  }
+  else 
+  {
+    args->background = 0;
+  }
   return args;
+}
+
+/**
+ * Frees the memory used by the given Arguments struct and its members.
+ *
+ * @param args The pointer to the Arguments struct
+ */
+void 
+cleanup_args(struct Arguments *args)
+{
+  free(args->command); // free the single command
+  for (int i = 0; i <= args->num_options; ++i) // free all options
+  {
+    free(args->options[i]);
+  }
+  free(args->options); // free the options array
+  for (int i = 0; i <= args->num_params; ++i) // free all params
+  {
+    free(args->parameters[i]);
+  }
+  free(args->parameters); // free the params array
+  free(args); // free the struct itself
 }
 
 /**
@@ -215,3 +279,63 @@ strdup (const char *s)
     return NULL;
   return (char *) memcpy (new, s, len);
 }
+
+/**
+ * Returns a 0 if the command to exit the shell is successful, or 1
+ * otherwise.
+ *
+ * @param args The full user command
+ * @return 0 or 1 to signal success or failure
+ */
+int 
+builtin_exit(struct Arguments *args)
+{
+  if (args->options[0] != NULL || args->parameters[0] != NULL || 
+      args->background)
+  {
+    fprintf(stderr, "Invalid options/parameters\nUsage: exit\n");
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * TODO: print terminating signal if applicable
+ * Prints out either the exit status or the terminating signal of the
+ * last foreground process ran by the shell.
+ *
+ * @param args The full user command
+ */
+void 
+builtin_status(struct Arguments *args, int exit_status)
+{
+  if (args->options[0] != NULL || args->parameters[0] != NULL || 
+      args->background)
+  {
+    fprintf(stderr, "Invalid options/parameters\nUsage: status\n");
+    return;
+  }
+  printf("exit value %d\n", exit_status);
+}
+
+/**
+ * TODO:
+ * Changes the current working directory of the shell. Without extra
+ * arguments, the cwd is changed according to the HOME environment
+ * variable.
+ *
+ * @param args The full user command
+ */
+void 
+builtin_cd(struct Arguments *args)
+{}
+
+/**
+ * TODO:
+ * Attempts to execute the user command.
+ *
+ * @param args The full user command
+ */
+int 
+exec_args(struct Arguments *args)
+{}
