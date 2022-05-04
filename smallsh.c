@@ -17,8 +17,6 @@
 
 /**
  * TODO:
- * - "cd" built-in
- * - "exit" built-in
  * - function to handle non-built-in commands (foregound)
  * - background functionality
  * - input/output redirection
@@ -30,6 +28,8 @@
 #include <sys/types.h>
 #include <stdlib.h>
 #include <string.h>
+#include <err.h>
+#include <errno.h>
 
 char *get_pidstr(void);
 struct Arguments *get_userinput(char *pidstr);
@@ -40,6 +40,7 @@ char *strdup(const char *s);
 int builtin_exit(struct Arguments *args);
 void builtin_status(struct Arguments *args, int exit_status);
 void builtin_cd(struct Arguments *args);
+char * getcwd_a(void);
 int exec_args(struct Arguments *args);
 
 struct Arguments
@@ -319,7 +320,6 @@ builtin_status(struct Arguments *args, int exit_status)
 }
 
 /**
- * TODO:
  * Changes the current working directory of the shell. Without extra
  * arguments, the cwd is changed according to the HOME environment
  * variable.
@@ -328,7 +328,47 @@ builtin_status(struct Arguments *args, int exit_status)
  */
 void 
 builtin_cd(struct Arguments *args)
-{}
+{
+  if (args->num_options || args->num_params > 1)
+  {
+    fprintf(stderr, "Invalid options/parameters\nUsage: cd [PATH]\n");
+    return;
+  }
+  const char *home = getenv("HOME");
+  char *cwd = getcwd_a();
+  char *path = args->parameters[0];
+  if (path == NULL)
+  {
+    if (chdir(home))
+    {
+      fprintf(stderr, "Error changing to home directory\n");
+    }
+  }
+  else if (chdir(path))
+  {
+    fprintf(stderr, "Invalid path: '%s'\n", path);
+  }
+  free(cwd);
+}
+
+/**
+ * (from archive.c skeleton code)
+ * Allocates a string containing the CWD
+ *
+ * @return allocated string
+ */
+char *
+getcwd_a(void)
+{
+  char *pwd = NULL;
+  for (size_t sz = 128;; sz *= 2)
+  {
+    pwd = realloc(pwd, sz);
+    if (getcwd(pwd, sz)) break;
+    if (errno != ERANGE) err(errno, "getcwd()");
+  }
+  return pwd;
+}
 
 /**
  * TODO:
