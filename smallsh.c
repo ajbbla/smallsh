@@ -62,7 +62,10 @@ main(void)
   struct Arguments *args = get_userinput(pidstr);
   while (1)
   {
-    if (!strcmp(args->command, "exit") && !builtin_exit(args))
+    if (args->command == NULL || args->command[0] == '#')
+    { // ignore empty inputs and comments
+    } // (skip to the end of the if/else block)
+    else if (!strcmp(args->command, "exit") && !builtin_exit(args))
     {
       break;
     }
@@ -150,7 +153,6 @@ get_userinput(char *pidstr)
     }
     buf[count] = '\0';
     char **tokens = tokenize_input(buf);
-    /* sort input into a struct of arguments */
     struct Arguments *args = get_args(tokens);
     free(buf);
     free(tokens);
@@ -194,50 +196,59 @@ struct Arguments *
 get_args(char **input)
 {
   struct Arguments *args = malloc(sizeof(struct Arguments));
-  // the first element is the command
-  args->command = strdup(input[0]);
-  size_t options_size = 4 * sizeof(char*);
-  size_t params_size = 4 * sizeof(char*);
-  args->options = malloc(options_size);
-  args->parameters = malloc(params_size);
-  int i = 1; // input index
-  int j = 0; // options index
-  int k = 0; // params index
-  while (input[i] != NULL)
+  if (input[0] == NULL) // check for an empty input
   {
-    if (input[i][0] == '-')
-    { // add to options
-      if (j * sizeof(char*) == options_size - sizeof(char*))
-      {
-        options_size *= 2;
-        args->options = realloc(args->options, options_size);
-      }
-      args->options[j++] = strdup(input[i]);
-    }
-    else if (strcmp(input[i], "&"))
-    { // add to params
-      if (k * sizeof(char*) == params_size - sizeof(char*))
-      {
-        params_size *= 2;
-        args->parameters = realloc(args->parameters, params_size);
-      }
-      args->parameters[k++] = strdup(input[i]);
-    }
-    ++i;
-  }
-  // NULL terminate options and params
-  args->options[j] = NULL;
-  args->num_options = j;
-  args->parameters[k] = NULL;
-  args->num_params = k;
-  // background -> 1 if final element == '&', 0 otherwise
-  if (!strcmp(input[i - 1], "&")) 
-  {
-    args->background = 1;
-  }
-  else 
-  {
+    args->command = NULL;
+    args->options = NULL;
+    args->num_options = 0;
+    args->parameters = NULL;
+    args->num_params = 0;
     args->background = 0;
+  }
+  else
+  {
+    args->command = strdup(input[0]); // first token is the command
+    size_t options_size = 4 * sizeof(char*);
+    size_t params_size = 4 * sizeof(char*);
+    args->options = malloc(options_size);
+    args->parameters = malloc(params_size);
+    int i = 1; // input index
+    int j = 0; // options index
+    int k = 0; // params index
+    while (input[i] != NULL)
+    {
+      if (input[i][0] == '-')
+      { // add to options
+        if (j * sizeof(char*) == options_size - sizeof(char*))
+        {
+          options_size *= 2;
+          args->options = realloc(args->options, options_size);
+        }
+        args->options[j++] = strdup(input[i]);
+      }
+      else if (strcmp(input[i], "&")) // ignore non-terminal "&" tokens
+      { // add to params
+        if (k * sizeof(char*) == params_size - sizeof(char*))
+        {
+          params_size *= 2;
+          args->parameters = realloc(args->parameters, params_size);
+        }
+        args->parameters[k++] = strdup(input[i]);
+      }
+      ++i;
+    }
+    args->num_options = j;
+    args->options[j] = NULL;
+    args->num_params = k;
+    args->parameters[k] = NULL;
+    if (!strcmp(input[i - 1], "&")) 
+    { // execute in the background
+      args->background = 1;
+    }
+    else 
+    { // execute in the foreground
+      args->background = 0;
+    }
   }
   return args;
 }
@@ -251,12 +262,12 @@ void
 cleanup_args(struct Arguments *args)
 {
   free(args->command); // free the single command
-  for (int i = 0; i <= args->num_options; ++i) // free all options
+  for (int i = 0; i < args->num_options; ++i) // free all options
   {
     free(args->options[i]);
   }
   free(args->options); // free the options array
-  for (int i = 0; i <= args->num_params; ++i) // free all params
+  for (int i = 0; i < args->num_params; ++i) // free all params
   {
     free(args->parameters[i]);
   }
