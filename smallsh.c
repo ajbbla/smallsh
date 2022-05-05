@@ -32,24 +32,24 @@
 #include <errno.h>
 
 char *get_pidstr(void);
-struct Arguments *get_userinput(char *pidstr);
+struct Input *get_userinput(char *pidstr);
 char **tokenize_input(char *buf);
-struct Arguments *get_args(char **input);
-void cleanup_args(struct Arguments *args);
+struct Input *get_input(char **input);
+void cleanup_input(struct Input *input);
 char *strdup(const char *s);
-int builtin_exit(struct Arguments *args);
-void builtin_status(struct Arguments *args, int exit_status);
-void builtin_cd(struct Arguments *args);
+int builtin_exit(struct Input *input);
+void builtin_status(struct Input *input, int exit_status);
+void builtin_cd(struct Input *input);
 char * getcwd_a(void);
-int exec_args(struct Arguments *args);
+int exec_input(struct Input *input);
 
-struct Arguments
+struct Input
 {
-  char *command;
-  char **options;
-  char **parameters;
-  int num_options;
-  int num_params;
+  // TODO: refactor program to match the following
+  char **args;
+  int num_args;
+  char *infile;
+  char *outfile;
   int background; // Boolean
 };
 
@@ -59,32 +59,32 @@ main(void)
   int exit_status = 0;
   char *pidstr = get_pidstr();
   printf("PID: %s\n", pidstr);
-  struct Arguments *args = get_userinput(pidstr);
+  struct Input *input = get_userinput(pidstr);
   while (1)
   {
-    if (args->command == NULL || args->command[0] == '#')
+    if (input->args == NULL || input->args[0][0] == '#')
     { // ignore empty inputs and comments
     } // (skip to the end of the if/else block)
-    else if (!strcmp(args->command, "exit") && !builtin_exit(args))
+    else if (!strcmp(input->args[0], "exit") && !builtin_exit(input))
     {
       break;
     }
-    else if (!strcmp(args->command, "status"))
+    else if (!strcmp(input->args[0], "status"))
     {
-      builtin_status(args, exit_status);
+      builtin_status(input, exit_status);
     }
-    else if (!strcmp(args->command, "cd"))
+    else if (!strcmp(input->args[0], "cd"))
     {
-      builtin_cd(args);
+      builtin_cd(input);
     }
     else
     {
-      exit_status = exec_args(args);
+      exit_status = exec_input(input);
     }
-    cleanup_args(args);
-    args = get_userinput(pidstr);
+    cleanup_input(input);
+    input = get_userinput(pidstr);
   }
-  cleanup_args(args);
+  cleanup_input(input);
   free(pidstr);
   return EXIT_SUCCESS;
 }
@@ -116,7 +116,7 @@ get_pidstr(void)
  * @param pidstr The current process ID as a string
  * @return The input divided up into a struct of arguments
  */
-struct Arguments * 
+struct Input * 
 get_userinput(char *pidstr)
 {
     size_t buf_size = 64;
@@ -152,11 +152,12 @@ get_userinput(char *pidstr)
       }
     }
     buf[count] = '\0';
+
     char **tokens = tokenize_input(buf);
-    struct Arguments *args = get_args(tokens);
+    struct Input *input = get_input(tokens);
     free(buf);
     free(tokens);
-    return args;
+    return input;
 }
 
 /**
@@ -186,93 +187,92 @@ tokenize_input(char *buf)
 }
 
 /**
- * Initializes and returns a pointer to an Arguments struct from the given
+ * Initializes and returns a pointer to an Input struct from the given
  * user input.
  *
- * @param input The tokenized user input as an array of strings
- * @return The pointer to the initialized Arguments struct
+ * @param tokens The tokenized user input as an array of strings
+ * @return The pointer to the initialized Input struct
  */
-struct Arguments *
-get_args(char **input)
+struct Input *
+get_input(char **tokens)
 {
-  struct Arguments *args = malloc(sizeof(struct Arguments));
-  if (input[0] == NULL) // check for an empty input
+  struct Input *input = malloc(sizeof(struct Input));
+  input->args = NULL;
+  input->num_args = 0;
+  input->infile = NULL;
+  input->outfile = NULL;
+  input->background = 0;
+  if (tokens[0] != NULL) // check for an empty input
   {
-    args->command = NULL;
-    args->options = NULL;
-    args->num_options = 0;
-    args->parameters = NULL;
-    args->num_params = 0;
-    args->background = 0;
-  }
-  else
-  {
-    args->command = strdup(input[0]); // first token is the command
-    size_t options_size = 4 * sizeof(char*);
-    size_t params_size = 4 * sizeof(char*);
-    args->options = malloc(options_size);
-    args->parameters = malloc(params_size);
-    int i = 1; // input index
-    int j = 0; // options index
-    int k = 0; // params index
-    while (input[i] != NULL)
+    size_t args_size = 4 * sizeof(char*);
+    input->args = malloc(args_size);
+    int i = 0; // tokens index
+    int j = 0; // args index
+    while (tokens[i] != NULL)
     {
-      if (input[i][0] == '-')
-      { // add to options
-        if (j * sizeof(char*) == options_size - sizeof(char*))
+      if (strcmp(tokens[i], "&")) // ignore non-terminal "&" tokens
+      { // add to args
+        if (!strcmp(tokens[i], "<")) // check for input redirection
         {
-          options_size *= 2;
-          args->options = realloc(args->options, options_size);
+          input->infile = strdup(tokens[i + 1]);
+          printf("infile: '%s'\n", input->infile);
+          i += 2;
         }
-        args->options[j++] = strdup(input[i]);
-      }
-      else if (strcmp(input[i], "&")) // ignore non-terminal "&" tokens
-      { // add to params
-        if (k * sizeof(char*) == params_size - sizeof(char*))
+        else if (!strcmp(tokens[i], ">")) // check for output redirection
         {
-          params_size *= 2;
-          args->parameters = realloc(args->parameters, params_size);
+          input->outfile = strdup(tokens[i + 1]);
+          printf("outfile: '%s'\n", input->outfile);
+          i += 2;
         }
-        args->parameters[k++] = strdup(input[i]);
+        else
+        {
+          if (j * sizeof(char*) == args_size - sizeof(char*))
+          {
+            args_size *= 2;
+            input->args = realloc(input->args, args_size);
+          }
+          input->args[j++] = strdup(tokens[i++]);
+          printf("args[%d]: '%s'\n", j-1, input->args[j-1]);
+        }
       }
-      ++i;
+      else if (tokens[i + 1] == NULL)
+      {
+        input->background = 1;
+        printf("background: yes\n");
+        ++i;
+      }
     }
-    args->num_options = j;
-    args->options[j] = NULL;
-    args->num_params = k;
-    args->parameters[k] = NULL;
-    if (!strcmp(input[i - 1], "&")) 
-    { // execute in the background
-      args->background = 1;
-    }
-    else 
-    { // execute in the foreground
-      args->background = 0;
-    }
+    input->num_args = j;
+    input->args[j] = NULL;
   }
-  return args;
+  return input;
 }
 
 /**
- * Frees the memory used by the given Arguments struct and its members.
+ * Frees the memory used by the given Input struct and its members.
  *
- * @param args The pointer to the Arguments struct
+ * @param input The pointer to the Input struct
  */
 void 
-cleanup_args(struct Arguments *args)
+cleanup_input(struct Input *input)
 {
-  free(args->command); // free the single command
-  for (int i = 0; i < args->num_options; ++i) // free all options
+  if (input->args != NULL)
   {
-    free(args->options[i]);
+    for (int i = 0; i < input->num_args; ++i) // free all args
+    {
+      free(input->args[i]);
+    }
+    free(input->args); // free the args array
   }
-  free(args->options); // free the options array
-  for (int i = 0; i < args->num_params; ++i) // free all params
+  if (input->infile != NULL)
   {
-    free(args->parameters[i]);
+    free(input->infile); // free the infile string
   }
-  free(args->parameters); // free the params array
-  free(args); // free the struct itself
+  if (input->outfile != NULL)
+  {
+    free(input->outfile); // free the outfile string
+  }
+  free(input); // free the struct itself
 }
 
 /**
@@ -296,16 +296,15 @@ strdup (const char *s)
  * Returns a 0 if the command to exit the shell is successful, or 1
  * otherwise.
  *
- * @param args The full user command
+ * @param input The full user command
  * @return 0 or 1 to signal success or failure
  */
 int 
-builtin_exit(struct Arguments *args)
+builtin_exit(struct Input *input)
 {
-  if (args->options[0] != NULL || args->parameters[0] != NULL || 
-      args->background)
+  if (input->num_args > 1)
   {
-    fprintf(stderr, "Invalid options/parameters\nUsage: exit\n");
+    fprintf(stderr, "Invalid number of arguments\nUsage: exit\n");
     return 1;
   }
   return 0;
@@ -316,18 +315,18 @@ builtin_exit(struct Arguments *args)
  * Prints out either the exit status or the terminating signal of the
  * last foreground process ran by the shell.
  *
- * @param args The full user command
+ * @param input The full user command
  */
 void 
-builtin_status(struct Arguments *args, int exit_status)
+builtin_status(struct Input *input, int exit_status)
 {
-  if (args->options[0] != NULL || args->parameters[0] != NULL || 
-      args->background)
+  if (input->num_args > 1)
   {
-    fprintf(stderr, "Invalid options/parameters\nUsage: status\n");
+    fprintf(stderr, "Invalid number of arguments\nUsage: status\n");
     return;
   }
   printf("exit value %d\n", exit_status);
+  fflush(stdout);
 }
 
 /**
@@ -335,19 +334,19 @@ builtin_status(struct Arguments *args, int exit_status)
  * arguments, the cwd is changed according to the HOME environment
  * variable.
  *
- * @param args The full user command
+ * @param input The full user command
  */
 void 
-builtin_cd(struct Arguments *args)
+builtin_cd(struct Input *input)
 {
-  if (args->num_options || args->num_params > 1)
+  if (input->num_args > 2)
   {
-    fprintf(stderr, "Invalid options/parameters\nUsage: cd [PATH]\n");
+    fprintf(stderr, "Invalid number of arguments\nUsage: cd [PATH]\n");
     return;
   }
   const char *home = getenv("HOME");
   char *cwd = getcwd_a();
-  char *path = args->parameters[0];
+  char *path = input->args[1];
   if (path == NULL)
   {
     if (chdir(home))
@@ -359,6 +358,8 @@ builtin_cd(struct Arguments *args)
   {
     fprintf(stderr, "Invalid path: '%s'\n", path);
   }
+  printf("cwd: '%s'\n", cwd);
+  printf("changed to: '%s'\n", path);
   free(cwd);
 }
 
@@ -385,8 +386,8 @@ getcwd_a(void)
  * TODO:
  * Attempts to execute the user command.
  *
- * @param args The full user command
+ * @param input The full user command
  */
 int 
-exec_args(struct Arguments *args)
+exec_input(struct Input *input)
 {}
