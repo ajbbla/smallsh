@@ -17,7 +17,6 @@
 
 /**
  * TODO:
- * - function to handle non-built-in commands (foregound)
  * - background functionality
  * - input/output redirection
  * - signals
@@ -26,28 +25,28 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <stdlib.h>
 #include <string.h>
 #include <err.h>
 #include <errno.h>
 
 char *get_pidstr(void);
-struct Input *get_userinput(char *pidstr);
+struct Input *get_userinput();
 char **tokenize_input(char *buf);
 struct Input *get_input(char **input);
 void cleanup_input(struct Input *input);
 char *strdup(const char *s);
 int builtin_exit(struct Input *input);
-void builtin_status(struct Input *input, int exit_status);
+void builtin_status(struct Input *input, int exitStatus);
 void builtin_cd(struct Input *input);
 char * getcwd_a(void);
-int exec_input(struct Input *input);
+int fork_child(struct Input *input);
 
 struct Input
 {
-  // TODO: refactor program to match the following
   char **args;
-  int num_args;
+  int numArgs;
   char *infile;
   char *outfile;
   int background; // Boolean
@@ -56,10 +55,10 @@ struct Input
 int
 main(void)
 {
-  int exit_status = 0;
-  char *pidstr = get_pidstr();
-  printf("PID: %s\n", pidstr);
-  struct Input *input = get_userinput(pidstr);
+  int exitStatus = 0;
+  printf("PID: %d\n", getpid());
+  fflush(stdout);
+  struct Input *input = get_userinput();
   while (1)
   {
     if (input->args == NULL || input->args[0][0] == '#')
@@ -71,7 +70,7 @@ main(void)
     }
     else if (!strcmp(input->args[0], "status"))
     {
-      builtin_status(input, exit_status);
+      builtin_status(input, exitStatus);
     }
     else if (!strcmp(input->args[0], "cd"))
     {
@@ -79,13 +78,12 @@ main(void)
     }
     else
     {
-      exit_status = exec_input(input);
+      exitStatus = fork_child(input);
     }
     cleanup_input(input);
-    input = get_userinput(pidstr);
+    input = get_userinput();
   }
   cleanup_input(input);
-  free(pidstr);
   return EXIT_SUCCESS;
 }
 
@@ -117,14 +115,16 @@ get_pidstr(void)
  * @return The input divided up into a struct of arguments
  */
 struct Input * 
-get_userinput(char *pidstr)
+get_userinput()
 {
     size_t buf_size = 64;
-    char *buf = malloc((buf_size)); 
+    char *buf = malloc((buf_size));
+    char *pidstr = get_pidstr();
     int count = 0;
     char c;
     char next;
     printf(": ");
+    fflush(stdout);
     while ((c = fgetc(stdin)) != '\n')
     {
       if (count == buf_size - 1)
@@ -156,6 +156,7 @@ get_userinput(char *pidstr)
     char **tokens = tokenize_input(buf);
     struct Input *input = get_input(tokens);
     free(buf);
+    free(pidstr);
     free(tokens);
     return input;
 }
@@ -198,7 +199,7 @@ get_input(char **tokens)
 {
   struct Input *input = malloc(sizeof(struct Input));
   input->args = NULL;
-  input->num_args = 0;
+  input->numArgs = 0;
   input->infile = NULL;
   input->outfile = NULL;
   input->background = 0;
@@ -215,13 +216,13 @@ get_input(char **tokens)
         if (!strcmp(tokens[i], "<")) // check for input redirection
         {
           input->infile = strdup(tokens[i + 1]);
-          printf("infile: '%s'\n", input->infile);
+          // printf("infile: '%s'\n", input->infile);
           i += 2;
         }
         else if (!strcmp(tokens[i], ">")) // check for output redirection
         {
           input->outfile = strdup(tokens[i + 1]);
-          printf("outfile: '%s'\n", input->outfile);
+          // printf("outfile: '%s'\n", input->outfile);
           i += 2;
         }
         else
@@ -232,17 +233,17 @@ get_input(char **tokens)
             input->args = realloc(input->args, args_size);
           }
           input->args[j++] = strdup(tokens[i++]);
-          printf("args[%d]: '%s'\n", j-1, input->args[j-1]);
+          // printf("args[%d]: '%s'\n", j-1, input->args[j-1]);
         }
       }
       else if (tokens[i + 1] == NULL)
       {
         input->background = 1;
-        printf("background: yes\n");
+        // printf("background: yes\n");
         ++i;
       }
     }
-    input->num_args = j;
+    input->numArgs = j;
     input->args[j] = NULL;
   }
   return input;
@@ -258,7 +259,7 @@ cleanup_input(struct Input *input)
 {
   if (input->args != NULL)
   {
-    for (int i = 0; i < input->num_args; ++i) // free all args
+    for (int i = 0; i < input->numArgs; ++i) // free all args
     {
       free(input->args[i]);
     }
@@ -302,9 +303,10 @@ strdup (const char *s)
 int 
 builtin_exit(struct Input *input)
 {
-  if (input->num_args > 1)
+  if (input->numArgs > 1)
   {
     fprintf(stderr, "Invalid number of arguments\nUsage: exit\n");
+    fflush(stderr);
     return 1;
   }
   return 0;
@@ -318,14 +320,15 @@ builtin_exit(struct Input *input)
  * @param input The full user command
  */
 void 
-builtin_status(struct Input *input, int exit_status)
+builtin_status(struct Input *input, int exitStatus)
 {
-  if (input->num_args > 1)
+  if (input->numArgs > 1)
   {
     fprintf(stderr, "Invalid number of arguments\nUsage: status\n");
+    fflush(stderr);
     return;
   }
-  printf("exit value %d\n", exit_status);
+  printf("exit value %d\n", exitStatus);
   fflush(stdout);
 }
 
@@ -339,9 +342,10 @@ builtin_status(struct Input *input, int exit_status)
 void 
 builtin_cd(struct Input *input)
 {
-  if (input->num_args > 2)
+  if (input->numArgs > 2)
   {
     fprintf(stderr, "Invalid number of arguments\nUsage: cd [PATH]\n");
+    fflush(stderr);
     return;
   }
   const char *home = getenv("HOME");
@@ -352,14 +356,14 @@ builtin_cd(struct Input *input)
     if (chdir(home))
     {
       fprintf(stderr, "Error changing to home directory\n");
+      fflush(stderr);
     }
   }
   else if (chdir(path))
   {
     fprintf(stderr, "Invalid path: '%s'\n", path);
+    fflush(stderr);
   }
-  printf("cwd: '%s'\n", cwd);
-  printf("changed to: '%s'\n", path);
   free(cwd);
 }
 
@@ -384,10 +388,45 @@ getcwd_a(void)
 
 /**
  * TODO:
- * Attempts to execute the user command.
+ * Forks a child to try and execute the user input.
  *
  * @param input The full user command
  */
 int 
-exec_input(struct Input *input)
-{}
+fork_child(struct Input *input)
+{
+  int childStatus;
+  int exitStatus;
+  pid_t childPid = fork();
+
+  if (childPid == -1)
+  { // Error
+    fprintf(stderr, "Fork failed, exiting...\n");
+    fflush(stderr);
+    exit(EXIT_FAILURE);
+  }
+  else if (childPid == 0)
+  { // Child Process
+    execvp(input->args[0], input->args); // attempt to exec the command
+    fprintf(stderr, "Failed to execute '%s", input->args[0]);
+    for (int i = 1; i < input->numArgs; ++i)
+    {
+      fprintf(stderr, " %s", input->args[i]);
+    }
+    fprintf(stderr, "'\n");
+    fflush(stderr);
+    cleanup_input(input);
+    exit(EXIT_FAILURE);
+  }
+  else
+  { // Parent Process
+    childPid = waitpid(childPid, &childStatus, 0);
+    if (WIFEXITED(childStatus))
+    {
+      exitStatus = WEXITSTATUS(childStatus);
+      // printf("Child %d exited normally with status %d\n", childPid, exitStatus);
+      return exitStatus;
+    }
+    // TODO: else WTERMSIG to check which signal terminated the process
+  }
+}
