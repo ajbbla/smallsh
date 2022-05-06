@@ -30,6 +30,7 @@
 #include <string.h>
 #include <err.h>
 #include <errno.h>
+#include <fcntl.h>
 
 char *get_pidstr(void);
 struct Input *get_userinput();
@@ -42,6 +43,9 @@ void builtin_status(struct Input *input, int exitStatus);
 void builtin_cd(struct Input *input);
 char * getcwd_a(void);
 int fork_child(struct Input *input);
+int exec_input(char **args);
+int redirect_input(char *filename);
+int redirect_output(char *filename);
 
 struct Input
 {
@@ -355,14 +359,12 @@ builtin_cd(struct Input *input)
   {
     if (chdir(home))
     {
-      fprintf(stderr, "Error changing to home directory\n");
-      fflush(stderr);
+      perror("chdir()");
     }
   }
   else if (chdir(path))
   {
-    fprintf(stderr, "Invalid path: '%s'\n", path);
-    fflush(stderr);
+    perror("chdir()");
   }
   free(cwd);
 }
@@ -401,20 +403,16 @@ fork_child(struct Input *input)
 
   if (childPid == -1)
   { // Error
-    fprintf(stderr, "Fork failed, exiting...\n");
+    fprintf(stderr, "fork(): Fork failed\n");
     fflush(stderr);
     exit(EXIT_FAILURE);
   }
   else if (childPid == 0)
   { // Child Process
-    execvp(input->args[0], input->args); // attempt to exec the command
-    fprintf(stderr, "Failed to execute '%s", input->args[0]);
-    for (int i = 1; i < input->numArgs; ++i)
+    if (!redirect_input(input->infile) && !redirect_output(input->outfile))
     {
-      fprintf(stderr, " %s", input->args[i]);
+      exec_input(input->args);
     }
-    fprintf(stderr, "'\n");
-    fflush(stderr);
     cleanup_input(input);
     exit(EXIT_FAILURE);
   }
@@ -429,4 +427,79 @@ fork_child(struct Input *input)
     }
     // TODO: else WTERMSIG to check which signal terminated the process
   }
+}
+
+/**
+ * Redirects stdin to the file with the given filename.
+ *
+ * @param infile The name of the input file
+ * 
+ * @return -1 for failure, 0 for success
+ */
+int
+redirect_input(char *filename)
+{
+  if (filename != NULL)
+  {
+    int in = open(filename, O_RDONLY);
+    if (in == -1)
+    {
+      perror("open()");
+      return -1;
+    }
+    if (dup2(in, 0) == -1)
+    {
+      perror("dup2()");
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Redirects stdout to the file with the given filename.
+ *
+ * @param outfile The name of the output file
+ * 
+ * @return -1 for failure, 0 for success
+ */
+int
+redirect_output(char *filename)
+{
+  if (filename != NULL)
+  {
+    int out = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out == -1)
+    {
+      perror("open()");
+      return -1;
+    }
+    if (dup2(out, 1) == -1)
+    {
+      perror("dup2()");
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Attempts to execute the given argument(s), printing an error and
+ * returning if not.
+ *
+ * @param args The array of arguments
+ * @return -1 to signify failure
+ */
+int
+exec_input(char **args)
+{
+    execvp(args[0], args); // attempt to exec the command
+    fprintf(stderr, "exec_input(): Failed to execute '%s", args[0]);
+    for (int i = 1; args[i] != NULL; ++i)
+    {
+      fprintf(stderr, " %s", args[i]);
+    }
+    fprintf(stderr, "'\n");
+    fflush(stderr);
+    return -1;
 }
