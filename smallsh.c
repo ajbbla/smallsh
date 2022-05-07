@@ -18,10 +18,10 @@
 /**
  * TODO:
  * - background functionality
- * - input/output redirection
  * - signals
  */
 
+#define _POSIX_SOURCE
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -31,21 +31,7 @@
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
-
-char *get_pidstr(void);
-struct Input *get_userinput();
-char **tokenize_input(char *buf);
-struct Input *get_input(char **input);
-void cleanup_input(struct Input *input);
-char *strdup(const char *s);
-int builtin_exit(struct Input *input);
-void builtin_status(struct Input *input, int exitStatus);
-void builtin_cd(struct Input *input);
-char * getcwd_a(void);
-int fork_child(struct Input *input);
-int exec_input(char **args);
-int redirect_input(char *filename);
-int redirect_output(char *filename);
+#include <signal.h>
 
 struct Input
 {
@@ -56,6 +42,34 @@ struct Input
   int background; // Boolean
 };
 
+struct Node
+{
+  int value;
+  struct Node *next;
+};
+
+char *get_pidstr(void);
+struct Input *get_userinput();
+char **tokenize_input(char *buf);
+struct Input *get_input(char **input);
+void cleanup_input(struct Input *input);
+char *strdup(const char *s);
+int builtin_exit(struct Input *input);
+void builtin_status(struct Input *input, int exitStatus);
+void builtin_cd(struct Input *input);
+char *getcwd_a(void);
+int fork_child_fg(struct Input *input);
+struct Node *fork_child_bg(struct Input *input);
+int exec_input(char **args);
+int redirect_input(char *filename);
+int redirect_output(char *filename);
+int reap(struct Node *head);
+struct Node *init_node(int value);
+struct Node *delete_node(struct Node *head, int value);
+void cleanup_llist(struct Node *head);
+void kill_bg(struct Node *bgList);
+void print_llist(struct Node *head);
+
 int
 main(void)
 {
@@ -63,6 +77,8 @@ main(void)
   printf("PID: %d\n", getpid());
   fflush(stdout);
   struct Input *input = get_userinput();
+  struct Node *bgList = NULL;
+  int reapedPid;
   while (1)
   {
     if (input->args == NULL || input->args[0][0] == '#')
@@ -82,11 +98,42 @@ main(void)
     }
     else
     {
-      exitStatus = fork_child(input);
+      // if a bg process, add a node to bg list
+      /* TODO:
+       * There should be be two fork functions:
+       * - foreground fork returns to exitStatus
+       * - background fork returns the linked list
+       */
+      if (input->background)
+      {
+        if (bgList == NULL)
+        {
+          bgList = fork_child_bg(input);
+        }
+        else
+        {
+          bgList->next = fork_child_bg(input);
+        }
+        printf("bgList: %d\n", bgList->value);
+      }
+      else
+      {
+        exitStatus = fork_child_fg(input);
+      }
+    } 
+    // if (bgList), try waitpid(WNOHANG) and update bg list if needed
+    reapedPid = reap(bgList);
+    if (reapedPid)
+    {
+      bgList = delete_node(bgList, reapedPid);
     }
     cleanup_input(input);
+    print_llist(bgList);
     input = get_userinput();
   }
+  // if (head), iterate over list and individually kill each of them
+  kill_bg(bgList);
+  cleanup_llist(bgList);
   cleanup_input(input);
   return EXIT_SUCCESS;
 }
@@ -156,7 +203,6 @@ get_userinput()
       }
     }
     buf[count] = '\0';
-
     char **tokens = tokenize_input(buf);
     struct Input *input = get_input(tokens);
     free(buf);
@@ -390,17 +436,14 @@ getcwd_a(void)
 
 /**
  * TODO:
- * Forks a child to try and execute the user input.
+ * Forks a child to try and execute the user input as a foreground process.
  *
  * @param input The full user command
  */
 int 
-fork_child(struct Input *input)
+fork_child_fg(struct Input *input)
 {
-  int childStatus;
-  int exitStatus;
   pid_t childPid = fork();
-
   if (childPid == -1)
   { // Error
     fprintf(stderr, "fork(): Fork failed\n");
@@ -418,6 +461,9 @@ fork_child(struct Input *input)
   }
   else
   { // Parent Process
+    // child is a foreground process
+    int childStatus;
+    int exitStatus;
     childPid = waitpid(childPid, &childStatus, 0);
     if (WIFEXITED(childStatus))
     {
@@ -427,6 +473,59 @@ fork_child(struct Input *input)
     }
     // TODO: else WTERMSIG to check which signal terminated the process
   }
+}
+
+/**
+ * TODO:
+ * Forks a child to try and execute the user input as a background
+ * process.
+ *
+ * @param input The full user command
+ * @return A pointer to the new child Node 
+ */
+struct Node * 
+fork_child_bg(struct Input *input)
+{
+  pid_t childPid = fork();
+  if (childPid == -1)
+  { // Error
+    fprintf(stderr, "fork(): Fork failed\n");
+    fflush(stderr);
+    exit(EXIT_FAILURE);
+  }
+  else if (childPid == 0)
+  { // Child Process
+    // TODO: redirect stdin/stdout to /dev/null for bg processes
+    // IF the user doesn't specify otherwise
+    if (!redirect_input(input->infile) && !redirect_output(input->outfile))
+    {
+      exec_input(input->args);
+    }
+    cleanup_input(input);
+    exit(EXIT_FAILURE);
+  }
+  else
+  { // Parent Process
+    // child is a background process
+    printf("background PID is %d\n", childPid);
+    struct Node *newChild = init_node(childPid);
+    return newChild;
+  }
+}
+
+/**
+ * Reports the PID of the previously forked background child process and
+ * adds it to the current list of background processes.
+ *
+ * @param childPid the PID of the previously forked child process
+ */
+struct Node *
+report_bg(int childPid)
+{
+  printf("background PID is %d\n", childPid);
+  struct Node *newChild = init_node(childPid);
+  printf("newChild->value: %d\n", newChild->value);
+  return newChild;
 }
 
 /**
@@ -502,4 +601,137 @@ exec_input(char **args)
     fprintf(stderr, "'\n");
     fflush(stderr);
     return -1;
+}
+
+int
+reap(struct Node *bgList)
+{
+  if (bgList == NULL)
+  {
+    printf("No list!\n");
+    fflush(stdout);
+    return 0;
+  }
+  int reapedPid;
+  int childStatus;
+  int exitStatus;
+  reapedPid = waitpid(-1, &childStatus, WNOHANG);
+  printf("reapedPid value: %d\n", reapedPid);
+  fflush(stdout);
+  if (reapedPid)
+  {
+    if (WIFEXITED(childStatus))
+    {
+      exitStatus = WEXITSTATUS(childStatus);
+    }
+    // TODO: else WTERMSIG to check which signal terminated the process
+    printf("background PID %d is done: ", reapedPid); 
+    printf("exit value %d\n", exitStatus);
+    fflush(stdout);
+    return reapedPid;
+  }
+  return 0;
+}
+
+/**
+ * Creates a new Node with the given value.
+ *
+ * @param value The integer value for the new Node
+ * @return A pointer to the new Node
+ */
+struct Node *
+init_node(int value)
+{
+  struct Node *newNode = malloc(sizeof(struct Node));
+  newNode->value = value;
+  newNode->next = NULL;
+  return newNode;
+}
+
+/**
+ * Deletes the first Node found with the given value from the list and
+ * frees its memory.
+ *
+ * @param head The first Node in the list
+ * @param value The value of the Node to be deleted
+ * @return A pointer to the head of the list
+ */
+struct Node *
+delete_node(struct Node *head, int value)
+{
+  struct Node *current = head;
+  struct Node *prev = NULL;
+  printf("head->value: %d\n", current->value);
+  while (current->value != value) // find unwanted value
+  {
+    prev = current;
+    current = current->next;
+  }
+  if (prev == NULL)
+  {
+    struct Node *newHead = current->next;
+    free(current);
+    return newHead;
+  }
+  prev->next = current->next;
+  free(current);
+  return head;
+}
+
+/**
+ * Frees the memory of the given linked list in order.
+ *
+ * @param head The first Node in the list
+ */
+void
+cleanup_llist(struct Node *head)
+{
+  struct Node *current = head;
+  struct Node *tmp;
+  while (current != NULL)
+  {
+    tmp = current->next;
+    free(current);
+    current = tmp;
+  }
+}
+
+/**
+ * Iterates over the list of background processes to kill them.
+ *
+ * @param bgList The pointer to the list of background processes
+ */
+void 
+kill_bg(struct Node *bgList)
+{
+  struct Node *current = bgList;
+  while (current != NULL)
+  {
+    if (kill(current->value, SIGTERM))
+    {
+      perror("kill()");
+    }
+    current = current->next;
+  }
+}
+
+void
+print_llist(struct Node *head)
+{
+  if (head == NULL)
+  {
+    printf("List: NULL");
+  }
+  else
+  {
+    struct Node *current = head;
+    int i = 0;
+    printf("List: ");
+    while (current != NULL)
+    {
+      printf("[%d] %d > ", i++, current->value);
+      current = current->next;
+    }
+    printf("\n");
+  }
 }
