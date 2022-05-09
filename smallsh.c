@@ -17,8 +17,8 @@
 
 /**
  * TODO:
- * - background functionality
- * - signals
+ * - double-check assignment page
+ * - test everything
  */
 
 #define _POSIX_SOURCE
@@ -48,6 +48,8 @@ struct Node
   struct Node *next;
 };
 
+volatile sig_atomic_t fg_mode = 0;
+
 char *get_pidstr(void);
 struct Input *get_userinput();
 char **tokenize_input(char *buf);
@@ -65,14 +67,25 @@ int redirect_input(char *filename);
 int redirect_output(char *filename);
 int reap(struct Node *head);
 struct Node *init_node(int value);
+void append_node(struct Node *head, struct Node *newNode);
 struct Node *delete_node(struct Node *head, int value);
 void cleanup_llist(struct Node *head);
 void kill_bg(struct Node *bgList);
 void print_llist(struct Node *head);
+void catch_SIGINT(int signo);
+void toggle_fg_mode_on(int signo);
+void toggle_fg_mode_off(int signo);
 
 int
 main(void)
 {
+  struct sigaction ignore_action, SIGTSTP_action = {0};
+  SIGTSTP_action.sa_handler = toggle_fg_mode_on;
+  SIGTSTP_action.sa_flags = 0;
+  ignore_action.sa_handler = SIG_IGN;
+  sigaction(SIGTSTP, &SIGTSTP_action, NULL); // parent will catch SIGTSTP
+  sigaction(SIGINT, &ignore_action, NULL); // parent will ignore SIGINT
+
   int exitStatus = 0;
   printf("PID: %d\n", getpid());
   fflush(stdout);
@@ -98,13 +111,7 @@ main(void)
     }
     else
     {
-      // if a bg process, add a node to bg list
-      /* TODO:
-       * There should be be two fork functions:
-       * - foreground fork returns to exitStatus
-       * - background fork returns the linked list
-       */
-      if (input->background)
+      if (!fg_mode && input->background)
       {
         if (bgList == NULL)
         {
@@ -112,9 +119,8 @@ main(void)
         }
         else
         {
-          bgList->next = fork_child_bg(input);
+          append_node(bgList, fork_child_bg(input));
         }
-        printf("bgList: %d\n", bgList->value);
       }
       else
       {
@@ -123,12 +129,14 @@ main(void)
     } 
     // if (bgList), try waitpid(WNOHANG) and update bg list if needed
     reapedPid = reap(bgList);
-    if (reapedPid)
+
+    while (reapedPid)
     {
       bgList = delete_node(bgList, reapedPid);
+      reapedPid = reap(bgList);
     }
+    // print_llist(bgList);
     cleanup_input(input);
-    print_llist(bgList);
     input = get_userinput();
   }
   // if (head), iterate over list and individually kill each of them
@@ -176,8 +184,13 @@ get_userinput()
     char next;
     printf(": ");
     fflush(stdout);
-    while ((c = fgetc(stdin)) != '\n')
+    while (1)
     {
+      c = fgetc(stdin);
+      if (c == '\n' || c == EOF)
+      {
+        break;
+      }
       if (count == buf_size - 1)
       {
         buf_size *= 2;
@@ -266,13 +279,11 @@ get_input(char **tokens)
         if (!strcmp(tokens[i], "<")) // check for input redirection
         {
           input->infile = strdup(tokens[i + 1]);
-          // printf("infile: '%s'\n", input->infile);
           i += 2;
         }
         else if (!strcmp(tokens[i], ">")) // check for output redirection
         {
           input->outfile = strdup(tokens[i + 1]);
-          // printf("outfile: '%s'\n", input->outfile);
           i += 2;
         }
         else
@@ -283,13 +294,15 @@ get_input(char **tokens)
             input->args = realloc(input->args, args_size);
           }
           input->args[j++] = strdup(tokens[i++]);
-          // printf("args[%d]: '%s'\n", j-1, input->args[j-1]);
         }
       }
       else if (tokens[i + 1] == NULL)
       {
         input->background = 1;
-        // printf("background: yes\n");
+        ++i;
+      }
+      else
+      { // skip non-terminal "&" token
         ++i;
       }
     }
@@ -363,9 +376,9 @@ builtin_exit(struct Input *input)
 }
 
 /**
- * TODO: print terminating signal if applicable
  * Prints out either the exit status or the terminating signal of the
- * last foreground process ran by the shell.
+ * last foreground process ran by the shell. Signals are passed as their
+ * negation to differentiate from exit values.
  *
  * @param input The full user command
  */
@@ -378,7 +391,14 @@ builtin_status(struct Input *input, int exitStatus)
     fflush(stderr);
     return;
   }
-  printf("exit value %d\n", exitStatus);
+  if (exitStatus < 0)
+  {
+    printf("terminated by signal %d\n", abs(exitStatus));
+  }
+  else
+  {
+    printf("exit value %d\n", exitStatus);
+  }
   fflush(stdout);
 }
 
@@ -435,7 +455,6 @@ getcwd_a(void)
 }
 
 /**
- * TODO:
  * Forks a child to try and execute the user input as a foreground process.
  *
  * @param input The full user command
@@ -443,6 +462,9 @@ getcwd_a(void)
 int 
 fork_child_fg(struct Input *input)
 {
+  sigset_t block_set;
+  sigaddset(&block_set, SIGTSTP);
+  sigprocmask(SIG_BLOCK, &block_set, NULL); // block SIGTSTP
   pid_t childPid = fork();
   if (childPid == -1)
   { // Error
@@ -452,6 +474,10 @@ fork_child_fg(struct Input *input)
   }
   else if (childPid == 0)
   { // Child Process
+    struct sigaction SIGINT_action = {0};
+    SIGINT_action.sa_handler = catch_SIGINT;
+    SIGINT_action.sa_flags = 0;
+    sigaction(SIGINT, &SIGINT_action, NULL); // child will catch SIGINT
     if (!redirect_input(input->infile) && !redirect_output(input->outfile))
     {
       exec_input(input->args);
@@ -468,15 +494,19 @@ fork_child_fg(struct Input *input)
     if (WIFEXITED(childStatus))
     {
       exitStatus = WEXITSTATUS(childStatus);
-      // printf("Child %d exited normally with status %d\n", childPid, exitStatus);
-      return exitStatus;
     }
-    // TODO: else WTERMSIG to check which signal terminated the process
+    else
+    {
+      exitStatus = -WTERMSIG(childStatus);
+      printf("terminated by signal %d\n", -exitStatus);
+      fflush(stdout);
+    }
+    sigprocmask(SIG_UNBLOCK, &block_set, NULL); // block SIGTSTP
+    return exitStatus;
   }
 }
 
 /**
- * TODO:
  * Forks a child to try and execute the user input as a background
  * process.
  *
@@ -495,9 +525,20 @@ fork_child_bg(struct Input *input)
   }
   else if (childPid == 0)
   { // Child Process
-    // TODO: redirect stdin/stdout to /dev/null for bg processes
-    // IF the user doesn't specify otherwise
-    if (!redirect_input(input->infile) && !redirect_output(input->outfile))
+    struct sigaction ignore_action = {0};
+    ignore_action.sa_handler = SIG_IGN;
+    sigaction(SIGTSTP, &ignore_action, NULL); // child will ignore SIGTSTP
+    char *in = "/dev/null";
+    char *out = "/dev/null";
+    if (input->infile != NULL)
+    {
+      in = input->infile;
+    }
+    if (input->outfile != NULL)
+    {
+      out = input->outfile;
+    }
+    if (!redirect_input(in) && !redirect_output(out))
     {
       exec_input(input->args);
     }
@@ -514,25 +555,9 @@ fork_child_bg(struct Input *input)
 }
 
 /**
- * Reports the PID of the previously forked background child process and
- * adds it to the current list of background processes.
- *
- * @param childPid the PID of the previously forked child process
- */
-struct Node *
-report_bg(int childPid)
-{
-  printf("background PID is %d\n", childPid);
-  struct Node *newChild = init_node(childPid);
-  printf("newChild->value: %d\n", newChild->value);
-  return newChild;
-}
-
-/**
  * Redirects stdin to the file with the given filename.
  *
  * @param infile The name of the input file
- * 
  * @return -1 for failure, 0 for success
  */
 int
@@ -541,14 +566,17 @@ redirect_input(char *filename)
   if (filename != NULL)
   {
     int in = open(filename, O_RDONLY);
+    fcntl(in, F_SETFD, FD_CLOEXEC);
     if (in == -1)
     {
       perror("open()");
+      fflush(stderr);
       return -1;
     }
     if (dup2(in, 0) == -1)
     {
       perror("dup2()");
+      fflush(stderr);
       return -1;
     }
   }
@@ -559,7 +587,6 @@ redirect_input(char *filename)
  * Redirects stdout to the file with the given filename.
  *
  * @param outfile The name of the output file
- * 
  * @return -1 for failure, 0 for success
  */
 int
@@ -568,14 +595,17 @@ redirect_output(char *filename)
   if (filename != NULL)
   {
     int out = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fcntl(out, F_SETFD, FD_CLOEXEC);
     if (out == -1)
     {
       perror("open()");
+      fflush(stderr);
       return -1;
     }
     if (dup2(out, 1) == -1)
     {
       perror("dup2()");
+      fflush(stderr);
       return -1;
     }
   }
@@ -603,30 +633,37 @@ exec_input(char **args)
     return -1;
 }
 
+/**
+ * Attempts to reap any will child processes, returning the PID of the
+ * reaped process if successful or 0 otherwise.
+ *
+ * @param bgList The pointer to the list of current background processes
+ * @return The PID of the reaped process or 0
+ */
 int
 reap(struct Node *bgList)
 {
   if (bgList == NULL)
   {
-    printf("No list!\n");
-    fflush(stdout);
     return 0;
   }
   int reapedPid;
   int childStatus;
   int exitStatus;
   reapedPid = waitpid(-1, &childStatus, WNOHANG);
-  printf("reapedPid value: %d\n", reapedPid);
-  fflush(stdout);
   if (reapedPid)
   {
+    printf("background PID %d is done: ", reapedPid); 
     if (WIFEXITED(childStatus))
     {
       exitStatus = WEXITSTATUS(childStatus);
+      printf("exit value %d\n", exitStatus);
     }
-    // TODO: else WTERMSIG to check which signal terminated the process
-    printf("background PID %d is done: ", reapedPid); 
-    printf("exit value %d\n", exitStatus);
+    else
+    {
+      exitStatus = WTERMSIG(childStatus);
+      printf("terminated by signal %d\n", exitStatus);
+    }
     fflush(stdout);
     return reapedPid;
   }
@@ -649,6 +686,23 @@ init_node(int value)
 }
 
 /**
+ * Adds the given node to the end of the given linked list.
+ *
+ * @param head The pointer to the head of the list
+ * @param newNode The pointer to the new Node to be added
+ */
+void 
+append_node(struct Node *head, struct Node *newNode)
+{
+    struct Node *current = head;
+    while (current->next != NULL) // traverse to the end of the list
+    {
+      current = current->next;
+    }
+    current->next = newNode;
+}
+
+/**
  * Deletes the first Node found with the given value from the list and
  * frees its memory.
  *
@@ -661,7 +715,6 @@ delete_node(struct Node *head, int value)
 {
   struct Node *current = head;
   struct Node *prev = NULL;
-  printf("head->value: %d\n", current->value);
   while (current->value != value) // find unwanted value
   {
     prev = current;
@@ -732,6 +785,42 @@ print_llist(struct Node *head)
       printf("[%d] %d > ", i++, current->value);
       current = current->next;
     }
-    printf("\n");
   }
+  printf("\n");
+  fflush(stdout);
+}
+
+/**
+ * Signal handler for SIGINT that forces the process to self-terminate.
+ */
+void 
+catch_SIGINT(int signo)
+{
+  exit(0);
+}
+
+void
+toggle_fg_mode_on(int signo)
+{
+  fg_mode = 1; // toggle fg_mode on
+  // switch the SIGTSTP handler to toggle_fg_mode_off
+  struct sigaction SIGTSTP_action = {0};
+  SIGTSTP_action.sa_handler = toggle_fg_mode_off;
+  SIGTSTP_action.sa_flags = 0;
+  sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+  char *message = "\nEntering foreground-only mode (& is now ignored)\n";
+  write(STDOUT_FILENO, message, 50);
+}
+
+void
+toggle_fg_mode_off(int signo)
+{
+  fg_mode = 0; // toggle fg_mode off
+  // switch the SIGTSTP handler to toggle_fg_mode_on
+  struct sigaction SIGTSTP_action = {0};
+  SIGTSTP_action.sa_handler = toggle_fg_mode_on;
+  SIGTSTP_action.sa_flags = 0;
+  sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+  char *message = "\nExiting foreground-only mode\n";
+  write(STDOUT_FILENO, message, 30);
 }
