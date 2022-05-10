@@ -15,12 +15,6 @@
  * AUTHOR: Allen Blanton (CS 344, Spring 2022)
  */
 
-/**
- * TODO:
- * - double-check assignment page
- * - test everything
- */
-
 #define _POSIX_SOURCE
 #include <stdio.h>
 #include <unistd.h>
@@ -33,22 +27,22 @@
 #include <fcntl.h>
 #include <signal.h>
 
-struct Input
+struct Input // used to organize instances of user input
 {
   char **args;
   int numArgs;
   char *infile;
   char *outfile;
-  int background; // Boolean
+  int background; // Boolean for background processes
 };
 
-struct Node
+struct Node // used for llist implementation
 {
   int value;
   struct Node *next;
 };
 
-volatile sig_atomic_t fg_mode = 0;
+volatile sig_atomic_t fg_mode = 0; // Boolean for foreground-only mode
 
 char *get_pidstr(void);
 struct Input *get_userinput();
@@ -79,6 +73,7 @@ void toggle_fg_mode_off(int signo);
 int
 main(void)
 {
+  // Declare parent signal behavior
   struct sigaction ignore_action, SIGTSTP_action = {0};
   SIGTSTP_action.sa_handler = toggle_fg_mode_on;
   SIGTSTP_action.sa_flags = 0;
@@ -90,13 +85,15 @@ main(void)
   printf("PID: %d\n", getpid());
   fflush(stdout);
   struct Input *input = get_userinput();
-  struct Node *bgList = NULL;
+  struct Node *bgList = NULL; // llist to keep track of bg processes
   int reapedPid;
+
+  // Parse user input
   while (1)
   {
     if (input->args == NULL || input->args[0][0] == '#')
-    { // ignore empty inputs and comments
-    } // (skip to the end of the if/else block)
+    { // ignore empty inputs and comments; skip to end of if/else block
+    } 
     else if (!strcmp(input->args[0], "exit") && !builtin_exit(input))
     {
       break;
@@ -110,7 +107,7 @@ main(void)
       builtin_cd(input);
     }
     else
-    {
+    { // try to execute non-built-in command
       if (!fg_mode && input->background)
       {
         if (bgList == NULL)
@@ -127,19 +124,21 @@ main(void)
         exitStatus = fork_child_fg(input);
       }
     } 
-    // if (bgList), try waitpid(WNOHANG) and update bg list if needed
-    reapedPid = reap(bgList);
 
+    // Attempt to reap a bg process
+    reapedPid = reap(bgList);
     while (reapedPid)
-    {
+    { // continue reaping until unsuccessful
       bgList = delete_node(bgList, reapedPid);
       reapedPid = reap(bgList);
     }
-    // print_llist(bgList);
+
+    // Proceed to the next prompt for user input
     cleanup_input(input);
     input = get_userinput();
   }
-  // if (head), iterate over list and individually kill each of them
+
+  // Final cleanup
   kill_bg(bgList);
   cleanup_llist(bgList);
   cleanup_input(input);
@@ -182,6 +181,7 @@ get_userinput()
     int count = 0;
     char c;
     char next;
+
     printf(": ");
     fflush(stdout);
     while (1)
@@ -215,7 +215,9 @@ get_userinput()
         buf[count++] = c;
       }
     }
-    buf[count] = '\0';
+    buf[count] = '\0'; // terminate the buffer
+
+    // Convert the buffer into tokens to populate the Input struct
     char **tokens = tokenize_input(buf);
     struct Input *input = get_input(tokens);
     free(buf);
@@ -236,17 +238,20 @@ tokenize_input(char *buf)
 {
   size_t array_size = 4 * (sizeof(char*));
   char **tokens = malloc(array_size);
+
+  // Iterate over the buffer to generate tokens
   int count = 0;
   tokens[count++] = strtok(buf, " ");
   while (tokens[count - 1] != NULL)
   {
     if (count * sizeof(char*) == array_size - sizeof(char*))
-    {
+    { // resize the tokens array if needed
       array_size *= 2;
       tokens = realloc(tokens, array_size);
     }
     tokens[count++] = strtok(NULL, " ");
   }
+
   return tokens;
 }
 
@@ -266,49 +271,46 @@ get_input(char **tokens)
   input->infile = NULL;
   input->outfile = NULL;
   input->background = 0;
+
   if (tokens[0] != NULL) // check for an empty input
   {
     size_t args_size = 4 * sizeof(char*);
     input->args = malloc(args_size);
     int i = 0; // tokens index
     int j = 0; // args index
+
+    // Check each token to populate the Input struct
     while (tokens[i] != NULL)
     {
-      if (strcmp(tokens[i], "&")) // ignore non-terminal "&" tokens
-      { // add to args
-        if (!strcmp(tokens[i], "<")) // check for input redirection
-        {
-          input->infile = strdup(tokens[i + 1]);
-          i += 2;
-        }
-        else if (!strcmp(tokens[i], ">")) // check for output redirection
-        {
-          input->outfile = strdup(tokens[i + 1]);
-          i += 2;
-        }
-        else
-        {
-          if (j * sizeof(char*) == args_size - sizeof(char*))
-          {
-            args_size *= 2;
-            input->args = realloc(input->args, args_size);
-          }
-          input->args[j++] = strdup(tokens[i++]);
-        }
+      if (!strcmp(tokens[i], "<")) 
+      { // found a path for input redirection
+        input->infile = strdup(tokens[i + 1]);
+        i += 2;
       }
-      else if (tokens[i + 1] == NULL)
-      {
+      else if (!strcmp(tokens[i], ">")) 
+      { // found a path for output redirection
+        input->outfile = strdup(tokens[i + 1]);
+        i += 2;
+      }
+      else if (!strcmp(tokens[i], "&") && tokens[i + 1] == NULL)
+      { // found a "&" argument at the end
         input->background = 1;
         ++i;
       }
       else
-      { // skip non-terminal "&" token
-        ++i;
+      { // found a regular argument
+        if (j * sizeof(char*) == args_size - sizeof(char*))
+        { // resize the args array
+          args_size *= 2;
+          input->args = realloc(input->args, args_size);
+        }
+        input->args[j++] = strdup(tokens[i++]);
       }
     }
     input->numArgs = j;
-    input->args[j] = NULL;
+    input->args[j] = NULL; // terminate the args array
   }
+
   return input;
 }
 
@@ -418,6 +420,8 @@ builtin_cd(struct Input *input)
     fflush(stderr);
     return;
   }
+
+  // Change the directory according to the given arguments
   const char *home = getenv("HOME");
   char *cwd = getcwd_a();
   char *path = input->args[1];
@@ -432,6 +436,7 @@ builtin_cd(struct Input *input)
   {
     perror("chdir()");
   }
+
   free(cwd);
 }
 
@@ -451,6 +456,7 @@ getcwd_a(void)
     if (getcwd(pwd, sz)) break;
     if (errno != ERANGE) err(errno, "getcwd()");
   }
+
   return pwd;
 }
 
@@ -462,12 +468,15 @@ getcwd_a(void)
 int 
 fork_child_fg(struct Input *input)
 {
+  // Block SIGTSTP until fg process finishes
   sigset_t block_set;
   sigaddset(&block_set, SIGTSTP);
   sigprocmask(SIG_BLOCK, &block_set, NULL); // block SIGTSTP
+
+  // Fork a child
   pid_t childPid = fork();
   if (childPid == -1)
-  { // Error
+  { // Fork error
     fprintf(stderr, "fork(): Fork failed\n");
     fflush(stderr);
     exit(EXIT_FAILURE);
@@ -478,19 +487,25 @@ fork_child_fg(struct Input *input)
     SIGINT_action.sa_handler = catch_SIGINT;
     SIGINT_action.sa_flags = 0;
     sigaction(SIGINT, &SIGINT_action, NULL); // child will catch SIGINT
+
+    // Redirect I/O if needed and try to execute the command
     if (!redirect_input(input->infile) && !redirect_output(input->outfile))
     {
       exec_input(input->args);
     }
+
+    // Error during execution
     cleanup_input(input);
     exit(EXIT_FAILURE);
   }
   else
   { // Parent Process
-    // child is a foreground process
+    // Wait for the child to finish
     int childStatus;
     int exitStatus;
     childPid = waitpid(childPid, &childStatus, 0);
+
+    // Report its status
     if (WIFEXITED(childStatus))
     {
       exitStatus = WEXITSTATUS(childStatus);
@@ -501,7 +516,7 @@ fork_child_fg(struct Input *input)
       printf("terminated by signal %d\n", -exitStatus);
       fflush(stdout);
     }
-    sigprocmask(SIG_UNBLOCK, &block_set, NULL); // block SIGTSTP
+    sigprocmask(SIG_UNBLOCK, &block_set, NULL); // unblock SIGTSTP
     return exitStatus;
   }
 }
@@ -516,9 +531,10 @@ fork_child_fg(struct Input *input)
 struct Node * 
 fork_child_bg(struct Input *input)
 {
+  // Fork a child
   pid_t childPid = fork();
   if (childPid == -1)
-  { // Error
+  { // Fork error
     fprintf(stderr, "fork(): Fork failed\n");
     fflush(stderr);
     exit(EXIT_FAILURE);
@@ -528,6 +544,8 @@ fork_child_bg(struct Input *input)
     struct sigaction ignore_action = {0};
     ignore_action.sa_handler = SIG_IGN;
     sigaction(SIGTSTP, &ignore_action, NULL); // child will ignore SIGTSTP
+
+    // Define the path for I/O redirection
     char *in = "/dev/null";
     char *out = "/dev/null";
     if (input->infile != NULL)
@@ -538,23 +556,28 @@ fork_child_bg(struct Input *input)
     {
       out = input->outfile;
     }
+
+    // Redirect I/O and try to execute the input
     if (!redirect_input(in) && !redirect_output(out))
     {
       exec_input(input->args);
     }
+
+    // Error while executing
     cleanup_input(input);
     exit(EXIT_FAILURE);
   }
   else
   { // Parent Process
-    // child is a background process
     printf("background PID is %d\n", childPid);
+    fflush(stdout);
     struct Node *newChild = init_node(childPid);
     return newChild;
   }
 }
 
 /**
+ * (adapted from "Processes and I/O" Exploration)
  * Redirects stdin to the file with the given filename.
  *
  * @param infile The name of the input file
@@ -584,6 +607,7 @@ redirect_input(char *filename)
 }
 
 /**
+ * (adapted from "Processes and I/O" Exploration)
  * Redirects stdout to the file with the given filename.
  *
  * @param outfile The name of the output file
@@ -622,8 +646,11 @@ redirect_output(char *filename)
 int
 exec_input(char **args)
 {
-    execvp(args[0], args); // attempt to exec the command
-    fprintf(stderr, "exec_input(): Failed to execute '%s", args[0]);
+    // Attempt to exec the command
+    execvp(args[0], args);
+
+    // Error during execution
+    fprintf(stderr, "execvp(): Bad argument(s) '%s", args[0]);
     for (int i = 1; args[i] != NULL; ++i)
     {
       fprintf(stderr, " %s", args[i]);
@@ -643,10 +670,12 @@ exec_input(char **args)
 int
 reap(struct Node *bgList)
 {
-  if (bgList == NULL)
+  if (bgList == NULL) // check if there are any processes to reap
   {
     return 0;
   }
+
+  // Attempt to reap a process and report its exit status
   int reapedPid;
   int childStatus;
   int exitStatus;
@@ -665,9 +694,8 @@ reap(struct Node *bgList)
       printf("terminated by signal %d\n", exitStatus);
     }
     fflush(stdout);
-    return reapedPid;
   }
-  return 0;
+  return reapedPid; // 0 = no reaped process
 }
 
 /**
@@ -715,17 +743,22 @@ delete_node(struct Node *head, int value)
 {
   struct Node *current = head;
   struct Node *prev = NULL;
-  while (current->value != value) // find unwanted value
+
+  // Find the unwanted value
+  while (current->value != value)
   {
     prev = current;
     current = current->next;
   }
+
   if (prev == NULL)
-  {
+  { // unwanted value is at the head
     struct Node *newHead = current->next;
     free(current);
     return newHead;
   }
+
+  // Remove the unwanted Node
   prev->next = current->next;
   free(current);
   return head;
@@ -768,6 +801,11 @@ kill_bg(struct Node *bgList)
   }
 }
 
+/**
+ * Iterates over the given llist to print out its members.
+ *
+ * @param head The pointer to the head of the llist
+ */
 void
 print_llist(struct Node *head)
 {
@@ -792,6 +830,8 @@ print_llist(struct Node *head)
 
 /**
  * Signal handler for SIGINT that forces the process to self-terminate.
+ *
+ * @param signo The number of the signal
  */
 void 
 catch_SIGINT(int signo)
@@ -799,28 +839,42 @@ catch_SIGINT(int signo)
   exit(0);
 }
 
+/**
+ * Signal handler for SIGTSTP to turn on foreground-only mode.
+ *
+ * @param signo The number of the signal
+ */
 void
 toggle_fg_mode_on(int signo)
 {
   fg_mode = 1; // toggle fg_mode on
-  // switch the SIGTSTP handler to toggle_fg_mode_off
+
+  // Switch the SIGTSTP handler to toggle_fg_mode_off
   struct sigaction SIGTSTP_action = {0};
   SIGTSTP_action.sa_handler = toggle_fg_mode_off;
   SIGTSTP_action.sa_flags = 0;
   sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
   char *message = "\nEntering foreground-only mode (& is now ignored)\n";
   write(STDOUT_FILENO, message, 50);
 }
 
+/**
+ * Signal handler for SIGTSTP to turn off foreground-only mode.
+ *
+ * @param signo The number of the signal
+ */
 void
 toggle_fg_mode_off(int signo)
 {
   fg_mode = 0; // toggle fg_mode off
-  // switch the SIGTSTP handler to toggle_fg_mode_on
+
+  // Switch the SIGTSTP handler to toggle_fg_mode_on
   struct sigaction SIGTSTP_action = {0};
   SIGTSTP_action.sa_handler = toggle_fg_mode_on;
   SIGTSTP_action.sa_flags = 0;
   sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
   char *message = "\nExiting foreground-only mode\n";
   write(STDOUT_FILENO, message, 30);
 }
