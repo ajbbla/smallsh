@@ -1,7 +1,7 @@
 # smallsh
 
-smallsh is a shell program that implements a subset of features of well-
-known shells, such as bash.
+smallsh is a shell program that implements a subset of features of well-known 
+shells, such as bash.
 
 * Provides a prompt for running commands
 * Handles blank lines and comments, which are lines beginning with the # character
