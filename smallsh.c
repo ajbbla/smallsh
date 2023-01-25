@@ -15,16 +15,6 @@
  * AUTHOR: Allen Blanton (CS 344, Spring 2022)
  */
 
-/**
- * TODO:
- * - "cd" built-in
- * - "exit" built-in
- * - function to handle non-built-in commands (foregound)
- * - background functionality
- * - input/output redirection
- * - signals
- */
-
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
