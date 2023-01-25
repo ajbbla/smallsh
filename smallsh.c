@@ -1,149 +1,17 @@
-/**
- * NAME: smallsh - a small shell program
- * SYNOPSIS: smallsh
- * DESCRIPTION:
- * Implements a subset of features of well-known shells, such as bash:
- * - Provides a prompt for running commands
- * - Handles blank lines for comments (beginning with '#')
- * - Provides expansion for the variable $$
- * - Executes 3 commands built into the shell: exit, cd, and status
- * - Executes other commands by creating new processes using a function
- *   from the exec family of functions
- * - Supports input and output redirection
- * - Supports running commands in foreground and background processes
- * - Uses custom handlers for 2 signals: SIGINT and SIGTSTP
- * AUTHOR: Allen Blanton (CS 344, Spring 2022)
- */
+/* Definitions for my smallsh functions */
 
 #define _POSIX_SOURCE
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <stdlib.h>
-#include <string.h>
+
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
-struct Input // used to organize instances of user input
-{
-  char **args;
-  int numArgs;
-  char *infile;
-  char *outfile;
-  int background; // Boolean for background processes
-};
-
-struct Node // used for llist implementation
-{
-  int value;
-  struct Node *next;
-};
-
-volatile sig_atomic_t fg_mode = 0; // Boolean for foreground-only mode
-
-char *get_pidstr(void);
-struct Input *get_userinput();
-char **tokenize_input(char *buf);
-struct Input *get_input(char **input);
-void cleanup_input(struct Input *input);
-char *strdup(const char *s);
-int builtin_exit(struct Input *input);
-void builtin_status(struct Input *input, int exitStatus);
-void builtin_cd(struct Input *input);
-char *getcwd_a(void);
-int fork_child_fg(struct Input *input);
-struct Node *fork_child_bg(struct Input *input);
-int exec_input(char **args);
-int redirect_input(char *filename);
-int redirect_output(char *filename);
-int reap(struct Node *head);
-struct Node *init_node(int value);
-void append_node(struct Node *head, struct Node *newNode);
-struct Node *delete_node(struct Node *head, int value);
-void cleanup_llist(struct Node *head);
-void kill_bg(struct Node *bgList);
-void print_llist(struct Node *head);
-void catch_SIGINT(int signo);
-void toggle_fg_mode_on(int signo);
-void toggle_fg_mode_off(int signo);
-
-int
-main(void)
-{
-  // Declare parent signal behavior
-  struct sigaction ignore_action, SIGTSTP_action = {0};
-  SIGTSTP_action.sa_handler = toggle_fg_mode_on;
-  SIGTSTP_action.sa_flags = 0;
-  ignore_action.sa_handler = SIG_IGN;
-  sigaction(SIGTSTP, &SIGTSTP_action, NULL); // parent will catch SIGTSTP
-  sigaction(SIGINT, &ignore_action, NULL); // parent will ignore SIGINT
-
-  int exitStatus = 0;
-  printf("PID: %d\n", getpid());
-  fflush(stdout);
-  struct Input *input = get_userinput();
-  struct Node *bgList = NULL; // llist to keep track of bg processes
-  int reapedPid;
-
-  // Parse user input
-  while (1)
-  {
-    if (input->args == NULL || input->args[0][0] == '#')
-    { // ignore empty inputs and comments; skip to end of if/else block
-    } 
-    else if (!strcmp(input->args[0], "exit") && !builtin_exit(input))
-    {
-      break;
-    }
-    else if (!strcmp(input->args[0], "status"))
-    {
-      builtin_status(input, exitStatus);
-    }
-    else if (!strcmp(input->args[0], "cd"))
-    {
-      builtin_cd(input);
-    }
-    else
-    { // try to execute non-built-in command
-      if (!fg_mode && input->background)
-      {
-        if (bgList == NULL)
-        {
-          bgList = fork_child_bg(input);
-        }
-        else
-        {
-          append_node(bgList, fork_child_bg(input));
-        }
-      }
-      else
-      {
-        exitStatus = fork_child_fg(input);
-      }
-    } 
-
-    // Attempt to reap a bg process
-    reapedPid = reap(bgList);
-    while (reapedPid)
-    { // continue reaping until unsuccessful
-      bgList = delete_node(bgList, reapedPid);
-      reapedPid = reap(bgList);
-    }
-
-    // Proceed to the next prompt for user input
-    cleanup_input(input);
-    input = get_userinput();
-  }
-
-  // Final cleanup
-  kill_bg(bgList);
-  cleanup_llist(bgList);
-  cleanup_input(input);
-  return EXIT_SUCCESS;
-}
+#include "smallsh.h"
 
 /**
  * https://edstem.org/us/courses/21025/discussion/1437434?answer=3250618
@@ -699,90 +567,6 @@ reap(struct Node *bgList)
 }
 
 /**
- * Creates a new Node with the given value.
- *
- * @param value The integer value for the new Node
- * @return A pointer to the new Node
- */
-struct Node *
-init_node(int value)
-{
-  struct Node *newNode = malloc(sizeof(struct Node));
-  newNode->value = value;
-  newNode->next = NULL;
-  return newNode;
-}
-
-/**
- * Adds the given node to the end of the given linked list.
- *
- * @param head The pointer to the head of the list
- * @param newNode The pointer to the new Node to be added
- */
-void 
-append_node(struct Node *head, struct Node *newNode)
-{
-    struct Node *current = head;
-    while (current->next != NULL) // traverse to the end of the list
-    {
-      current = current->next;
-    }
-    current->next = newNode;
-}
-
-/**
- * Deletes the first Node found with the given value from the list and
- * frees its memory.
- *
- * @param head The first Node in the list
- * @param value The value of the Node to be deleted
- * @return A pointer to the head of the list
- */
-struct Node *
-delete_node(struct Node *head, int value)
-{
-  struct Node *current = head;
-  struct Node *prev = NULL;
-
-  // Find the unwanted value
-  while (current->value != value)
-  {
-    prev = current;
-    current = current->next;
-  }
-
-  if (prev == NULL)
-  { // unwanted value is at the head
-    struct Node *newHead = current->next;
-    free(current);
-    return newHead;
-  }
-
-  // Remove the unwanted Node
-  prev->next = current->next;
-  free(current);
-  return head;
-}
-
-/**
- * Frees the memory of the given linked list in order.
- *
- * @param head The first Node in the list
- */
-void
-cleanup_llist(struct Node *head)
-{
-  struct Node *current = head;
-  struct Node *tmp;
-  while (current != NULL)
-  {
-    tmp = current->next;
-    free(current);
-    current = tmp;
-  }
-}
-
-/**
  * Iterates over the list of background processes to kill them.
  *
  * @param bgList The pointer to the list of background processes
@@ -799,33 +583,6 @@ kill_bg(struct Node *bgList)
     }
     current = current->next;
   }
-}
-
-/**
- * Iterates over the given llist to print out its members.
- *
- * @param head The pointer to the head of the llist
- */
-void
-print_llist(struct Node *head)
-{
-  if (head == NULL)
-  {
-    printf("List: NULL");
-  }
-  else
-  {
-    struct Node *current = head;
-    int i = 0;
-    printf("List: ");
-    while (current != NULL)
-    {
-      printf("[%d] %d > ", i++, current->value);
-      current = current->next;
-    }
-  }
-  printf("\n");
-  fflush(stdout);
 }
 
 /**
