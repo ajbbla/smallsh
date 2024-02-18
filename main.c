@@ -17,12 +17,15 @@
 
 #define _POSIX_SOURCE
 
-#include <unistd.h>
-#include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "llist.h"
-#include "smallsh.h"
+#include "signal_handlers.h"
+#include "input_parsing.h"
+#include "process_control.h"
+#include "shell_commands.h"
+#include "utilities.h"
 
 // Boolean for foreground-only mode
 volatile sig_atomic_t fg_mode = 0;

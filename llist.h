@@ -3,9 +3,6 @@
 #ifndef LLIST_H
 #define LLIST_H
 
-#include <stdlib.h>
-#include <stdio.h>
-
 struct Node
 {
   int value;

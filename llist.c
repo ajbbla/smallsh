@@ -7,6 +7,9 @@
  * - print a llist's values in head-to-tail order
  */
 
+#include <stdlib.h>
+#include <stdio.h>
+
 #include "llist.h"
 
 /**
