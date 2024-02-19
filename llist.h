@@ -9,10 +9,18 @@ struct Node
   struct Node *next;
 };
 
+struct Llist
+{
+  struct Node *head;
+  struct Node *tail;
+  int size;
+};
+
 struct Node *init_node(int value);
-void append_node(struct Node *head, struct Node *newNode);
-struct Node *delete_node(struct Node *head, int value);
-void cleanup_llist(struct Node *head);
-void print_llist(struct Node *head);
+struct Llist *init_llist(void);
+void append_node(struct Llist *llist, struct Node *newNode);
+void delete_node(struct Llist *llist, int value);
+void cleanup_llist(struct Llist *llist);
+void print_llist(struct Llist *llist);
 
 #endif

@@ -229,49 +229,54 @@ exec_input(char **args)
  * Attempts to reap any will child processes, returning the PID of the
  * reaped process if successful or 0 otherwise.
  *
- * @param bgList The pointer to the list of current background processes
- * @return The PID of the reaped process or 0
+ * @param bgLlist The pointer to the list of current background processes
  */
-int
-reap(struct Node *bgList)
+void
+reap(struct Llist *bgLlist)
 {
-  if (bgList == NULL) // check if there are any processes to reap
+  if (bgLlist == NULL || bgLlist->size == 0) 
   {
-    return 0;
+    return;  // No processes to reap
   }
 
   // Attempt to reap a process and report its exit status
   int reapedPid;
   int childStatus;
   int exitStatus;
-  reapedPid = waitpid(-1, &childStatus, WNOHANG);
-  if (reapedPid)
+
+  do 
   {
-    printf("background PID %d is done: ", reapedPid); 
-    if (WIFEXITED(childStatus))
+    reapedPid = waitpid(-1, &childStatus, WNOHANG);
+    if (reapedPid > 0)
     {
-      exitStatus = WEXITSTATUS(childStatus);
-      printf("exit value %d\n", exitStatus);
+      // Process has finished
+      printf("background process %d finished: ", reapedPid);
+      if WIFEXITED(childStatus)
+      {
+        exitStatus = WEXITSTATUS(childStatus);
+        printf("exit value %d\n", exitStatus);
+      }
+      else if (WIFSIGNALED(childStatus))
+      {
+        exitStatus = WTERMSIG(childStatus);
+        printf("terminated by signal %d\n", exitStatus);     
+      }
+      fflush(stdout);
+      delete_node(bgLlist, reapedPid);
     }
-    else
-    {
-      exitStatus = WTERMSIG(childStatus);
-      printf("terminated by signal %d\n", exitStatus);
-    }
-    fflush(stdout);
   }
-  return reapedPid; // 0 = no reaped process
+  while (reapedPid > 0);
 }
 
 /**
  * Iterates over the list of background processes to kill them.
  *
- * @param bgList The pointer to the list of background processes
+ * @param bgLlist The pointer to the list of background processes
  */
 void 
-kill_bg(struct Node *bgList)
+kill_bg(struct Llist *bgLlist)
 {
-  struct Node *current = bgList;
+  struct Node *current = bgLlist->head;
   while (current != NULL)
   {
     if (kill(current->value, SIGTERM))
