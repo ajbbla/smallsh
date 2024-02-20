@@ -7,6 +7,9 @@
  * - print a llist's values in head-to-tail order
  */
 
+#include <stdlib.h>
+#include <stdio.h>
+
 #include "llist.h"
 
 /**
@@ -25,65 +28,103 @@ init_node(int value)
 }
 
 /**
- * Adds the given node to the end of the given linked list.
- *
- * @param head The pointer to the head of the list
- * @param newNode The pointer to the new Node to be added
- */
-void 
-append_node(struct Node *head, struct Node *newNode)
+ * Creates a new empty Linked List.
+ * 
+ * @return A pointer to the new List
+*/
+struct Llist *
+init_llist(void)
 {
-    struct Node *current = head;
-    while (current->next != NULL) // traverse to the end of the list
-    {
-      current = current->next;
-    }
-    current->next = newNode;
+  struct Llist *newLlist = malloc(sizeof(struct Llist));
+  newLlist->head = NULL;
+  newLlist->tail = NULL;
+  newLlist->size = 0;
+  return newLlist;
 }
 
 /**
- * Deletes the first Node found with the given value from the list and
+ * Adds the given node to the end of the given linked list.
+ *
+ * @param llist The pointer to the list
+ * @param newNode The pointer to the new Node to be added
+ */
+void 
+append_node(struct Llist *llist, struct Node *newNode)
+{
+  if (llist->tail == NULL)  // llist is empty
+  {
+    llist->head = newNode;
+    llist->tail = newNode;
+  } 
+  else  // llist is not empty
+  {
+    llist->tail->next = newNode;
+    llist->tail = newNode;
+  }
+  llist->size++;
+}
+
+/**
+ * Deletes the first Node found with the given value from the llist and
  * frees its memory.
  *
- * @param head The first Node in the list
+ * @param llist The pointer to the linked list
  * @param value The value of the Node to be deleted
- * @return A pointer to the head of the list
  */
-struct Node *
-delete_node(struct Node *head, int value)
+void
+delete_node(struct Llist *llist, int value)
 {
-  struct Node *current = head;
+  // printf("Trying to delete %d...", value);
+  struct Node *current = llist->head;
   struct Node *prev = NULL;
 
   // Find the unwanted value
-  while (current->value != value)
+  while (current != NULL && current->value != value)
   {
     prev = current;
     current = current->next;
   }
 
-  if (prev == NULL)
-  { // unwanted value is at the head
-    struct Node *newHead = current->next;
-    free(current);
-    return newHead;
+  if (current == NULL)  // value not found
+  {
+    return;
   }
 
-  // Remove the unwanted Node
-  prev->next = current->next;
+  if (prev == NULL)  // value found at head
+  {
+    llist->head = current->next;
+  }
+  else
+  {
+    prev->next = current->next;
+  }
+  
+  if (current == llist->tail)  // value found at tail
+  {
+    llist->tail = prev;
+  }
+
+  // printf("Found %d and freeing its memory!\n", current->value);
   free(current);
-  return head;
+  llist->size--;
+  if (llist->size == 0)  // llist is now empty
+  {
+    llist->head = NULL;
+    llist->tail = NULL;
+  }
 }
 
 /**
- * Frees the memory of the given linked list in order.
+ * Frees the memory of the given linked list by first
+ * freeing the memory of each of its Nodes in order
+ * before freeing the memory of the llist itself.
  *
- * @param head The first Node in the list
+ * @param llist The pointer to the llist
  */
 void
-cleanup_llist(struct Node *head)
+cleanup_llist(struct Llist *llist)
 {
-  struct Node *current = head;
+  struct Node *current = llist->head;
   struct Node *tmp;
   while (current != NULL)
   {
@@ -91,28 +132,28 @@ cleanup_llist(struct Node *head)
     free(current);
     current = tmp;
   }
+  free(llist);
 }
 
 /**
  * Iterates over the given llist to print out its members.
  *
- * @param head The pointer to the head of the llist
+ * @param llist The pointer to the the llist
  */
 void
-print_llist(struct Node *head)
+print_llist(struct Llist *llist)
 {
-  if (head == NULL)
+  struct Node *current = llist->head;
+  if (current == NULL)
   {
-    printf("List: NULL");
+    printf("Llist: NULL");
   }
   else
   {
-    struct Node *current = head;
-    int i = 0;
-    printf("List: ");
+    printf("Llist: (size: %d) ", llist->size);
     while (current != NULL)
     {
-      printf("[%d] %d > ", i++, current->value);
+      printf("%d > ", current->value);
       current = current->next;
     }
   }

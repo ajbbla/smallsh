@@ -17,12 +17,15 @@
 
 #define _POSIX_SOURCE
 
-#include <unistd.h>
-#include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "llist.h"
-#include "smallsh.h"
+#include "signal_handlers.h"
+#include "input_parsing.h"
+#include "process_control.h"
+#include "shell_commands.h"
+#include "utilities.h"
 
 // Boolean for foreground-only mode
 volatile sig_atomic_t fg_mode = 0;
@@ -35,13 +38,12 @@ main(void)
   SIGTSTP_action.sa_handler = toggle_fg_mode_on;
   SIGTSTP_action.sa_flags = 0;
   ignore_action.sa_handler = SIG_IGN;
-  sigaction(SIGTSTP, &SIGTSTP_action, NULL); // parent will catch SIGTSTP
-  sigaction(SIGINT, &ignore_action, NULL); // parent will ignore SIGINT
+  sigaction(SIGTSTP, &SIGTSTP_action, NULL);  // parent will catch SIGTSTP
+  sigaction(SIGINT, &ignore_action, NULL);  // parent will ignore SIGINT
 
   int exitStatus = 0;
   struct Input *input = get_userinput();
-  struct Node *bgList = NULL; // llist to keep track of bg processes
-  int reapedPid;
+  struct Llist *bgLlist = init_llist();  // llist to keep track of bg processes
 
   // Parse user input
   while (1)
@@ -65,14 +67,7 @@ main(void)
     { // try to execute non-built-in command
       if (!fg_mode && input->background)
       {
-        if (bgList == NULL)
-        {
-          bgList = fork_child_bg(input);
-        }
-        else
-        {
-          append_node(bgList, fork_child_bg(input));
-        }
+        append_node(bgLlist, fork_child_bg(input));
       }
       else
       {
@@ -80,13 +75,8 @@ main(void)
       }
     } 
 
-    // Attempt to reap a bg process
-    reapedPid = reap(bgList);
-    while (reapedPid)
-    { // continue reaping until unsuccessful
-      bgList = delete_node(bgList, reapedPid);
-      reapedPid = reap(bgList);
-    }
+    // Attempt to reap any bg processes
+    reap(bgLlist);
 
     // Proceed to the next prompt for user input
     cleanup_input(input);
@@ -94,8 +84,8 @@ main(void)
   }
 
   // Final cleanup
-  kill_bg(bgList);
-  cleanup_llist(bgList);
+  kill_bg(bgLlist);
+  cleanup_llist(bgLlist);
   cleanup_input(input);
   return EXIT_SUCCESS;
 }
