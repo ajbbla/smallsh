@@ -23,7 +23,7 @@ Once the program has been compiled, it can be run in the terminal via the follow
 
 To exit the program, type `exit` and press `Enter/Return`.
 
-## Features & Example Usage
+## Features
 ### Provides a prompt for running commands:
 ![smallsh-1](https://github.com/allenjbb/smallsh/assets/105831767/403fcd34-299e-4794-b477-441ab4ebab48)
 
